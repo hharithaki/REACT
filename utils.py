@@ -1,9 +1,12 @@
+from itertools import permutations
+import random
 import re
 import subprocess
+import time
 import numpy as np
-from simulation.unity_simulator import utils_viz
+from simulation.unity_simulator import utils_viz, comm_unity
 from sklweka.classifiers import Classifier
-from sklweka.dataset import Instance, missing_value
+from sklweka.dataset import to_instance
 delimeters = ['(', ')', ',']
 human_asp_pre = 'ASP/human_pre.sp'
 human_asp = 'ASP/human.sp'
@@ -11,7 +14,7 @@ ah_asp_pre = 'ASP/ahagent_pre.sp'
 ah_asp_new = 'ASP/ahagent.sp'
 display_marker = 'display'
 human_model = 'human_model.model'
-interacted_items = ['None', 'None', 'None']
+interacted_items = ['None', 'None']
 categorya_food = ['cutlets']
 categoryb_food = ['poundcake']
 food = ['breadslice'] + categorya_food + categoryb_food
@@ -24,40 +27,49 @@ graspable = food + drinks + containers
 objects = appliances + graspable + sittable
 heated_ = [[obj,False] for obj in categoryb_food]
 cooked_ = [[obj,False] for obj in categorya_food]
-human_coutner = 35
-ah_counter = 30
 
 def process_graph(graph, prev_actions):
+
     state = []
-    # Previous action of the agent
+    # Previous action of the agent (include multiple actions in their particular order?)
+    # state.append(prev_actions) -- TODO
     act = prev_actions[0].split()
     if len(act) == 4:
-        state.append(''.join([act[1],act[2]]))
+        state.append('_'.join([act[1][1:-1],act[2][1:-1]]))
     elif len(act) == 6:
-        state.append(''.join([act[1],act[2],act[4]]))
+        state.append('_'.join([act[1][1:-1],act[2][1:-1],act[4][1:-1]]))
     else:
-        state.append(prev_actions[0])
+        state.append('find_watergalss')
 
     # Item interactions (immediately previous interaction item or multiple items?)
     script_split = prev_actions[1].split()
     if len(script_split) == 4:
-        state.append(''.join([script_split[1],script_split[2]]))
+        state.append('_'.join([script_split[1][1:-1],script_split[2][1:-1]]))
         interacted_items.pop(0)
-        interacted_items.append(script_split[2])
+        interacted_items.append(script_split[2][1:-1])
     elif len(script_split) == 6:
-        state.append(''.join([script_split[1],script_split[2],script_split[4]]))
+        state.append('_'.join([script_split[1][1:-1],script_split[2][1:-1],script_split[4][1:-1]]))
         interacted_items.pop(0)
-        interacted_items.pop(0)
-        interacted_items.append(script_split[2])
-        interacted_items.append(script_split[4])
+        # interacted_items.pop(0)
+        interacted_items.append(script_split[2][1:-1])
+        # interacted_items.append(script_split[4][1:-1])
     else:
-        state.append(prev_actions[1])
-    state.append(tuple(interacted_items)) # TODO - seperate to two features an only use two interactive items.
+        state.append('find_waterglass')
+        interacted_items.pop(0)
+        interacted_items.append('waterglass')
+        interacted_items.pop(0)
+        interacted_items.append('waterglass')
+    state.append(interacted_items[0])
+    state.append(interacted_items[1])
     
     # Location of the agent
     human_pose = [node['obj_transform'] for node in graph['nodes'] if node['class_name'] == 'character'][0]
-    state.append(tuple(human_pose['position'])) # TODO - seperate x,y,z coordinates
-    state.append(tuple(human_pose['rotation'])) # TODO - seperate x,y,z coordinates
+    state.append(human_pose['position'][0]) # x
+    state.append(human_pose['position'][1]) # y
+    state.append(human_pose['position'][2]) # z
+    state.append(human_pose['rotation'][0]) # x
+    state.append(human_pose['rotation'][1]) # y
+    state.append(human_pose['rotation'][2]) # z
 
     # Proximity to the kitchen table
     kitchentable_pose = [node['obj_transform'] for node in graph['nodes'] if node['class_name'] == 'kitchentable'][0]
@@ -106,6 +118,7 @@ def process_graph(graph, prev_actions):
     # Number of items on the dinning table.
     no_table_items = len(table_items)
     state.append(no_table_items)
+
     return state
 
 def process_observation(script_instruction, graph, prev_actions):
@@ -114,32 +127,37 @@ def process_observation(script_instruction, graph, prev_actions):
     # state.append(prev_actions) -- TODO
     act = prev_actions[0].split()
     if len(act) == 4:
-        state.append(''.join([act[1],act[2]]))
+        state.append('_'.join([act[1][1:-1],act[2][1:-1]]))
     elif len(act) == 6:
-        state.append(''.join([act[1],act[2],act[4]]))
+        state.append('_'.join([act[1][1:-1],act[2][1:-1],act[4][1:-1]]))
     else:
         state.append(prev_actions[0])
 
     # Item interactions (immediately previous interaction item or multiple items?)
     script_split = prev_actions[1].split()
     if len(script_split) == 4:
-        state.append(''.join([script_split[1],script_split[2]]))
+        state.append('_'.join([script_split[1][1:-1],script_split[2][1:-1]]))
         interacted_items.pop(0)
-        interacted_items.append(script_split[2])
+        interacted_items.append(script_split[2][1:-1])
     elif len(script_split) == 6:
-        state.append(''.join([script_split[1],script_split[2],script_split[4]]))
+        state.append('_'.join([script_split[1][1:-1],script_split[2][1:-1],script_split[4][1:-1]]))
         interacted_items.pop(0)
-        interacted_items.pop(0)
-        interacted_items.append(script_split[2])
-        interacted_items.append(script_split[4])
+        # interacted_items.pop(0)
+        interacted_items.append(script_split[2][1:-1])
+        # interacted_items.append(script_split[4][1:-1])
     else:
         state.append(prev_actions[1])
-    state.append(tuple(interacted_items)) # TODO - seperate to two features an only use two interactive items.
+    state.append(interacted_items[0])
+    state.append(interacted_items[1])
     
     # Location of the agent
     human_pose = [node['obj_transform'] for node in graph['nodes'] if node['class_name'] == 'character'][0]
-    state.append(tuple(human_pose['position'])) # TODO - seperate x,y,z coordinates
-    state.append(tuple(human_pose['rotation'])) # TODO - seperate x,y,z coordinates
+    state.append(human_pose['position'][0]) # x
+    state.append(human_pose['position'][1]) # y
+    state.append(human_pose['position'][2]) # z
+    state.append(human_pose['rotation'][0]) # x
+    state.append(human_pose['rotation'][1]) # y
+    state.append(human_pose['rotation'][2]) # z
 
     # Proximity to the kitchen table
     kitchentable_pose = [node['obj_transform'] for node in graph['nodes'] if node['class_name'] == 'kitchentable'][0]
@@ -206,9 +224,9 @@ def process_observation(script_instruction, graph, prev_actions):
     # action of the agent
     act = script_instruction.split()
     if len(act) == 4:
-        state.append(''.join([act[1],act[2]]))
+        state.append('_'.join([act[1][1:-1],act[2][1:-1]]))
     elif len(act) == 6:
-        state.append(''.join([act[1],act[2],act[4]]))
+        state.append('_'.join([act[1][1:-1],act[2][1:-1],act[4][1:-1]]))
     return state
 
 # Depending on the accuracy of the model we can decide to expand the number of features by including:
@@ -267,7 +285,7 @@ def get_goal_achived(graph):
     else:
         return False
 
-def convert_state(graph, prev_human_actions, prev_ah_actions, act_success):
+def convert_state(graph, prev_human_actions, prev_ah_actions, human_success, ah_success, timestep):
     human_fluents = []
     ah_fluents = []
     fluents = []
@@ -284,86 +302,96 @@ def convert_state(graph, prev_human_actions, prev_ah_actions, act_success):
         ah_hand_objects.append(names)
 
     # % --------------- % find
-    if 'find' in prev_human_actions[-1] and act_success:
+    if 'find' in prev_human_actions[-1] and human_success:
         action = (prev_human_actions[-1].split())[2][1:-1] # <char0> [find] <poundcake> (248) True
         for obj in objects:
             if obj == action:
-                human_fluents.append('holds(found(human,' + action + '),0).')
-                ah_fluents.append('holds(agent_found(human,' + action + '),0).')
+                human_fluents.append('holds(found(human,' + action + '),' + timestep + ').')
+                ah_fluents.append('holds(agent_found(human,' + action + '),' + timestep + ').')
             else:
-                human_fluents.append('-holds(found(human,' + obj + '),0).') 
+                human_fluents.append('-holds(found(human,' + obj + '),' + timestep + ').') 
     else:
         human_found_set = False
         for obj in objects:
             if (obj in appliances or obj in sittable) and prev_human_actions[0] != 'None' and not human_found_set:
                 if obj == (prev_human_actions[0].split())[2][1:-1]:
-                    human_fluents.append('holds(found(human,' + obj + '),0).')
-                    ah_fluents.append('holds(agent_found(human,' + obj + '),0).')
+                    human_fluents.append('holds(found(human,' + obj + '),' + timestep + ').')
+                    ah_fluents.append('holds(agent_found(human,' + obj + '),' + timestep + ').')
                     human_found_set = True
                 else:
-                    human_fluents.append('-holds(found(human,' + obj + '),0).')
+                    human_fluents.append('-holds(found(human,' + obj + '),' + timestep + ').')
             elif obj in human_hand_objects and not human_found_set:
-                human_fluents.append('holds(found(human,' + obj + '),0).')
-                ah_fluents.append('holds(agent_found(human,' + obj + '),0).')
+                human_fluents.append('holds(found(human,' + obj + '),' + timestep + ').')
+                ah_fluents.append('holds(agent_found(human,' + obj + '),' + timestep + ').')
                 human_found_set = True
             else:
-                human_fluents.append('-holds(found(human,' + obj + '),0).')
-    if 'find' in prev_ah_actions[-1] and act_success:
+                human_fluents.append('-holds(found(human,' + obj + '),' + timestep + ').')
+    if 'find' in prev_ah_actions[-1] and ah_success:
         action = (prev_ah_actions[-1].split())[2][1:-1] # <char0> [find] <poundcake> (248) True
         for obj in objects:
             if obj == action:
-                ah_fluents.append('holds(found(ahagent,' + action + '),0).')
-                human_fluents.append('holds(agent_found(ahagent,' + action + '),0).')
+                ah_fluents.append('holds(found(ahagent,' + action + '),' + timestep + ').')
+                human_fluents.append('holds(agent_found(ahagent,' + action + '),' + timestep + ').')
             else:
-                ah_fluents.append('-holds(found(ahagent,' + obj + '),0).') 
+                ah_fluents.append('-holds(found(ahagent,' + obj + '),' + timestep + ').') 
     else:
         ah_found_set = False
         for obj in objects:
             if (obj in appliances or obj in sittable) and prev_ah_actions[0] != 'None' and not ah_found_set:
                 if obj == (prev_ah_actions[0].split())[2][1:-1]:
-                    ah_fluents.append('holds(found(ahagent,' + obj + '),0).')
-                    human_fluents.append('holds(agent_found(ahagent,' + obj + '),0).')
-                    found_set = True
+                    ah_fluents.append('holds(found(ahagent,' + obj + '),' + timestep + ').')
+                    human_fluents.append('holds(agent_found(ahagent,' + obj + '),' + timestep + ').')
+                    ah_found_set = True
                 else:
-                    ah_fluents.append('-holds(found(ahagent,' + obj + '),0).')
-            elif obj in ah_hand_objects and not found_set:
-                ah_fluents.append('holds(found(ahagent,' + obj + '),0).')
-                human_fluents.append('holds(agent_found(ahagent,' + obj + '),0).')
+                    ah_fluents.append('-holds(found(ahagent,' + obj + '),' + timestep + ').')
+            elif obj in ah_hand_objects and not ah_found_set:
+                ah_fluents.append('holds(found(ahagent,' + obj + '),' + timestep + ').')
+                human_fluents.append('holds(agent_found(ahagent,' + obj + '),' + timestep + ').')
                 ah_found_set = True
             else:
-                ah_fluents.append('-holds(found(ahagent,' + obj + '),0).')
+                ah_fluents.append('-holds(found(ahagent,' + obj + '),' + timestep + ').')
 
     # % --------------- % grab
-    if 'grab' in prev_human_actions[-1] and act_success:
+    if 'grab' in prev_human_actions[-1] and human_success:
         action = (prev_human_actions[-1].split())[2][1:-1]
         for obj in graspable:
             if obj == action:
-                human_fluents.append('holds(in_hand(human,' + action + '),0).')
-                ah_fluents.append('holds(agent_hand(human,' + action + '),0).')
+                human_fluents.append('holds(in_hand(human,' + action + '),' + timestep + ').')
+                ah_fluents.append('holds(agent_hand(human,' + action + '),' + timestep + ').')
+                new_fluent = 'holds(found(human,' + obj + '),' + timestep + ').'
+                human_fluents = [fluent for fluent in human_fluents if fluent != '-'+new_fluent]
+                human_fluents.append(new_fluent)
+                ah_fluents.append('holds(agent_found(human,' + obj + '),' + timestep + ').')
+                human_found_set = True
             else:
-                human_fluents.append('-holds(in_hand(human,' + obj + '),0).')
+                human_fluents.append('-holds(in_hand(human,' + obj + '),' + timestep + ').')
     else:
         for obj in graspable:
             if obj in human_hand_objects:
-                human_fluents.append('holds(in_hand(human,' + obj + '),0).')
-                ah_fluents.append('holds(agent_hand(human,' + obj + '),0).')
+                human_fluents.append('holds(in_hand(human,' + obj + '),' + timestep + ').')
+                ah_fluents.append('holds(agent_hand(human,' + obj + '),' + timestep + ').')
             else:
-                human_fluents.append('-holds(in_hand(human,' + obj + '),0).')
-    if 'grab' in prev_ah_actions[-1] and act_success:
+                human_fluents.append('-holds(in_hand(human,' + obj + '),' + timestep + ').')
+    if 'grab' in prev_ah_actions[-1] and ah_success:
         action = (prev_ah_actions[-1].split())[2][1:-1]
         for obj in graspable:
             if obj == action:
-                ah_fluents.append('holds(in_hand(ahagent,' + action + '),0).')
-                human_fluents.append('holds(agent_hand(ahagent,' + action + '),0).')
+                ah_fluents.append('holds(in_hand(ahagent,' + action + '),' + timestep + ').')
+                human_fluents.append('holds(agent_hand(ahagent,' + action + '),' + timestep + ').')
+                new_fluent = 'holds(found(ahagent,' + obj + '),' + timestep + ').'
+                ah_fluents = [fluent for fluent in ah_fluents if fluent != '-'+new_fluent]
+                ah_fluents.append(new_fluent)
+                human_fluents.append('holds(agent_found(ahagent,' + obj + '),' + timestep + ').')
+                ah_found_set = True
             else:
-                ah_fluents.append('-holds(in_hand(ahagent,' + obj + '),0).')
+                ah_fluents.append('-holds(in_hand(ahagent,' + obj + '),' + timestep + ').')
     else:
         for obj in graspable:
             if obj in ah_hand_objects:
-                ah_fluents.append('holds(in_hand(ahagent,' + obj + '),0).')
-                human_fluents.append('holds(agent_hand(ahagent,' + obj + '),0).')
+                ah_fluents.append('holds(in_hand(ahagent,' + obj + '),' + timestep + ').')
+                human_fluents.append('holds(agent_hand(ahagent,' + obj + '),' + timestep + ').')
             else:
-                ah_fluents.append('-holds(in_hand(ahagent,' + obj + '),0).')
+                ah_fluents.append('-holds(in_hand(ahagent,' + obj + '),' + timestep + ').')
     # % --------------- % put
     # Items on dinning table
     kitchentable_id = [node['id'] for node in graph['nodes'] if node['class_name'] == 'kitchentable'][0]
@@ -371,9 +399,9 @@ def convert_state(graph, prev_human_actions, prev_ah_actions, act_success):
     table_items = [node['class_name']  for edge in edges for node in graph['nodes'] if node['id'] == edge]
     for obj in graspable:
         if obj in table_items:
-            fluents.append('holds(on(' + obj + ',kitchentable),0).')
+            fluents.append('holds(on(' + obj + ',kitchentable),' + timestep + ').')
         else:
-            fluents.append('-holds(on(' + obj + ',kitchentable),0).')
+            fluents.append('-holds(on(' + obj + ',kitchentable),' + timestep + ').')
     # Items inside microwave
     microwave_id = [node['id'] for node in graph['nodes'] if node['class_name'] == 'microwave'][0]
     item_id = [edge['from_id'] for edge in graph['edges'] if edge['to_id'] == microwave_id and edge['relation_type'] == 'INSIDE']
@@ -383,58 +411,57 @@ def convert_state(graph, prev_human_actions, prev_ah_actions, act_success):
         microwave_item.append(names)
     for obj in graspable:
         if obj in microwave_item:
-            fluents.append('holds(on('+ obj + ',microwave),0).')
+            fluents.append('holds(on('+ obj + ',microwave),' + timestep + ').')
         else:
-            fluents.append('-holds(on('+ obj + ',microwave),0).')
+            fluents.append('-holds(on('+ obj + ',microwave),' + timestep + ').')
     # Items on stove
-    # fryingpan_id = [node['id'] for node in graph['nodes'] if node['class_name'] == 'fryingpan'][0]
-    # stove_id = [node['id'] for node in graph['nodes'] if node['class_name'] == 'stove'][0]
-    # pan_on_stove = [True for edge in graph['edges'] if edge['from_id'] == fryingpan_id and edge['to_id'] == stove_id and edge['relation_type'] == 'ON'][0]
-    # for obj in graspable:
-    #     if obj == 'fryingpan' and pan_on_stove:
-    #         fluents.append('holds(on('+ obj + ',stove),0).')
-    #     else:
-    #         fluents.append('-holds(on('+ obj + ',stove),0).')
+    fryingpan_id = [node['id'] for node in graph['nodes'] if node['class_name'] == 'fryingpan'][0]
+    stove_id = [node['id'] for node in graph['nodes'] if node['class_name'] == 'stove'][0]
+    pan_on_stove = [True for edge in graph['edges'] if edge['from_id'] == fryingpan_id and edge['to_id'] == stove_id and edge['relation_type'] == 'ON']
+    pan_on_stove = pan_on_stove[0] if pan_on_stove else False
+    for obj in graspable:
+        if obj == 'fryingpan' and pan_on_stove:
+            fluents.append('holds(on('+ obj + ',stove),' + timestep + ').')
+        else:
+            fluents.append('-holds(on('+ obj + ',stove),' + timestep + ').')
     # temp assumption => nothing on stove
-    default_fluents = ['-holds(on('+ obj + ',stove),0).' for obj in graspable]
-    fluents = fluents + default_fluents
+    # default_fluents = ['-holds(on('+ obj + ',stove),0).' for obj in graspable]
+    # fluents = fluents + default_fluents
 
     # % --------------- % open/close
     # Status of microwave
     microwave_status = [node['states'] for node in graph['nodes'] if node['class_name'] == 'microwave'][0]
+    print('-------------', microwave_status)
     if 'CLOSED' in microwave_status:
-        fluents.append('-holds(opened(microwave),0).')
+        fluents.append('-holds(opened(microwave),' + timestep + ').')
     elif 'OPEN' in microwave_status:
-        fluents.append('holds(opened(microwave),0).')
+        fluents.append('holds(opened(microwave),' + timestep + ').')
 
     # % --------------- % switch on/off
     # Status of microwave
     if 'OFF' in microwave_status:
-        fluents.append('-holds(switched_on(microwave),0).')
+        fluents.append('-holds(switched_on(microwave),' + timestep + ').')
     elif 'ON' in microwave_status:
-        fluents.append('holds(switched_on(microwave),0).')
+        fluents.append('holds(switched_on(microwave),' + timestep + ').')
     # Status of Stove
     stove_status = [node['states'] for node in graph['nodes'] if node['class_name'] == 'stove'][0]
     if 'OFF' in stove_status:
-        fluents.append('-holds(switched_on(stove),0).')
+        fluents.append('-holds(switched_on(stove),' + timestep + ').')
     elif 'ON' in stove_status:
-        fluents.append('holds(switched_on(stove),0).')
+        fluents.append('holds(switched_on(stove),' + timestep + ').')
 
     # % --------------- % heated
     for obj in categoryb_food: # poundcake
         heated_idx = [idx for idx, item in enumerate(heated_) if item[0] == obj][0]
         if (obj in microwave_item and 'ON' in microwave_status) or heated_[heated_idx][1]:
-            fluents.append('holds(heated(' + obj + '),0).')
+            fluents.append('holds(heated(' + obj + '),' + timestep + ').')
             heated_[heated_idx][1] = True
         else:
-            fluents.append('-holds(heated(' + obj + '),0).')
+            fluents.append('-holds(heated(' + obj + '),' + timestep + ').')
 
     # % --------------- % cooked
     # Items on fryingpan
-    fryingpan_id = [node['id'] for node in graph['nodes'] if node['class_name'] == 'fryingpan'][0]
     item_id = [edge['from_id'] for edge in graph['edges'] if edge['to_id'] == fryingpan_id and edge['relation_type'] == 'ON']
-    stove_id = [node['id'] for node in graph['nodes'] if node['class_name'] == 'stove'][0]
-    pan_on_stove = [True for edge in graph['edges'] if edge['from_id'] == fryingpan_id and edge['to_id'] == stove_id and edge['relation_type'] == 'ON'][0]
     pan_items = []
     for item in item_id:
         names = [node['class_name'] for node in graph['nodes'] if node['id'] == item][0]
@@ -442,32 +469,48 @@ def convert_state(graph, prev_human_actions, prev_ah_actions, act_success):
     for obj in categorya_food: # cutlets
         cooked_idx = [idx for idx, item in enumerate(cooked_) if item[0] == obj][0]
         if (obj in pan_items and 'ON' in stove_status and pan_on_stove) or cooked_[cooked_idx][1]:
-            fluents.append('holds(cooked(' + obj + '),0).')
+            fluents.append('holds(cooked(' + obj + '),' + timestep + ').')
             cooked_[cooked_idx][1] = True
         else:
-            fluents.append('-holds(cooked(' + obj + '),0).')
-    # % --------------- % ate => once we reach the eat action we will stop running the prg since virtaul home does not support eat hence adding default values below
-    default_fluents = ['-holds(ate(human,' + obj + '),0).' for obj in food]
-    human_fluents = human_fluents + default_fluents
+            fluents.append('-holds(cooked(' + obj + '),' + timestep + ').')
+    # % --------------- % ate => once we reach the eat action we will stop running the prg since goal has been reached hence adding some defaults here.
+    if 'eat' in prev_human_actions[-1] and human_success:
+        obj1 = (prev_human_actions[-1].split())[2][1:-1]
+        if 'eat' in prev_human_actions[0]:
+            obj2 = (prev_human_actions[0].split())[2][1:-1]
+            for obj in food:
+                if obj == obj1 or obj == obj2:
+                    human_fluents.append('holds(ate(human,' + obj + '),' + timestep + ').')
+                else:
+                    human_fluents.append('-holds(ate(human,' + obj + '),' + timestep + ').')
+        else:
+            for obj in food:
+                if obj == obj1:
+                    human_fluents.append('holds(ate(human,' + obj + '),' + timestep + ').')
+                else:
+                    human_fluents.append('-holds(ate(human,' + obj + '),' + timestep + ').')
+    else:
+        default_fluents = ['-holds(ate(human,' + obj + '),' + timestep + ').' for obj in food]
+        human_fluents = human_fluents + default_fluents
     # % --------------- % drink => same
-    default_fluents = ['-holds(drank(human,' + obj + '),0).' for obj in drinks]
+    default_fluents = ['-holds(drank(human,' + obj + '),' + timestep + ').' for obj in drinks]
     human_fluents = human_fluents + default_fluents
     # % --------------- % put_in
     for obj in categorya_food:
         if obj in pan_items:
-            fluents.append('holds(inside(' + obj + ',fryingpan),0).')
+            fluents.append('holds(inside(' + obj + ',fryingpan),' + timestep + ').')
         else:
-            fluents.append('-holds(inside(' + obj + ',fryingpan),0).')
+            fluents.append('-holds(inside(' + obj + ',fryingpan),' + timestep + ').')
     # % --------------- % sit
-    if 'sit' in prev_human_actions[-1] and act_success:
+    if 'sit' in prev_human_actions[-1] and human_success:
         action = (prev_human_actions[-1].split())[2][1:-1]
         for obj in sittable:
             if obj == action:
-                human_fluents.append('holds(sat(human,' + action + '),0).')
+                human_fluents.append('holds(sat(human,' + action + '),' + timestep + ').')
             else:
-                human_fluents.append('-holds(sat(human,' + obj + '),0).')
+                human_fluents.append('-holds(sat(human,' + obj + '),' + timestep + ').')
     else:
-        default_fluents = ['-holds(sat(human,' + obj + '),0).' for obj in sittable]
+        default_fluents = ['-holds(sat(human,' + obj + '),' + timestep + ').' for obj in sittable]
         human_fluents = human_fluents + default_fluents
     return human_fluents, ah_fluents, fluents
 
@@ -491,21 +534,43 @@ def process_answerlist(answer):
                 action_list.insert(i, element)
     return action_list
 
-def generate_script(answer, id_dict, character):
+def generate_script(human_act, ah_act, id_dict, human_character, ah_character):
     script = []
-    for action in answer:
-        for delimeter in delimeters:
-            action = " ".join(action.split(delimeter))
-        action_split = action.split()
-        if action_split[1] in ['put', 'put_in']:
-            if action_split[1] == 'put' and action_split[4] in ['microwave']:
-                script_instruction = character + ' [putin] <' + action_split[3] + '> (' + id_dict[action_split[3]] + ') <' + action_split[4] + '> (' + id_dict[action_split[4]] + ')'
+    # select the agent with the longest plan
+    plan_len = len(human_act) if len(human_act) > len(ah_act) else len(ah_act)
+    for action_index in range(plan_len):
+        # either of the agents may or may not have an act at the last steps
+        if len(human_act) > action_index:
+            human_action = human_act[action_index]
+            for delimeter in delimeters:
+                human_action = " ".join(human_action.split(delimeter))
+            human_action_split = human_action.split()
+            if human_action_split[1] in ['put', 'put_in']:
+                if human_action_split[1] == 'put' and human_action_split[4] in ['microwave']:
+                    human_script_instruction = human_character + ' [putin] <' + human_action_split[3] + '> (' + id_dict[human_action_split[3]] + ') <' + human_action_split[4] + '> (' + id_dict[human_action_split[4]] + ')'
+                else:
+                    human_script_instruction = human_character + ' [putback] <' + human_action_split[3] + '> (' + id_dict[human_action_split[3]] + ') <' + human_action_split[4] + '> (' + id_dict[human_action_split[4]] + ')'
+            elif human_action_split[1] in ['eat', 'drink']:
+                human_script_instruction = None
             else:
-                script_instruction = character + ' [putback] <' + action_split[3] + '> (' + id_dict[action_split[3]] + ') <' + action_split[4] + '> (' + id_dict[action_split[4]] + ')'
+                human_script_instruction = human_character + ' [' + human_action_split[1].replace('_','') + '] <' + human_action_split[3] + '> (' + id_dict[human_action_split[3]] + ')'
         else:
-            script_instruction = character + ' [' + action_split[1].replace('_','') + '] <' + action_split[3] + '> (' + id_dict[action_split[3]] + ')'
-        if script_instruction.startswith('<char0> [grab] <fryingpan>') or script_instruction.startswith('<char0> [putback] <fryingpan> (161) <stove>'):
-            continue
+            human_script_instruction = None
+        if len(ah_act) > action_index:
+            ah_action = ah_act[action_index]
+            for delimeter in delimeters:
+                ah_action = " ".join(ah_action.split(delimeter))
+            ah_action_split = ah_action.split()
+            if ah_action_split[1] in ['put', 'put_in']:
+                if ah_action_split[1] == 'put' and ah_action_split[4] in ['microwave']:
+                    ah_script_instruction = ah_character + ' [putin] <' + ah_action_split[3] + '> (' + id_dict[ah_action_split[3]] + ') <' + ah_action_split[4] + '> (' + id_dict[ah_action_split[4]] + ')'
+                else:
+                    ah_script_instruction = ah_character + ' [putback] <' + ah_action_split[3] + '> (' + id_dict[ah_action_split[3]] + ') <' + ah_action_split[4] + '> (' + id_dict[ah_action_split[4]] + ')'
+            else:
+                ah_script_instruction = ah_character + ' [' + ah_action_split[1].replace('_','') + '] <' + ah_action_split[3] + '> (' + id_dict[ah_action_split[3]] + ')'
+        else:
+            ah_script_instruction = None
+        script_instruction = (human_script_instruction + '|' + ah_script_instruction) if human_script_instruction and ah_script_instruction else (human_script_instruction if human_script_instruction else ah_script_instruction)
         script.append(script_instruction)
     return script
 
@@ -534,30 +599,103 @@ def clean_graph(comm, graph, objects):
 
 def predict_next_action(graph, prev_human_actions):
     values = process_graph(graph, prev_human_actions)
+    if (any(word in values[0] for word in ['bench','eat','drink'])) or (any(word in values[1] for word in ['bench','eat','drink'])):
+        # no trianing data
+        return None
     model, header = Classifier.deserialize(human_model)
     # create new instance
-    inst = Instance.create_instance(values)
+    inst = to_instance(header,values) # Instance.create_instance(values)
     inst.dataset = header
     # make prediction
     index = model.classify_instance(inst)
     return header.class_attribute.value(int(index))
+
+# block: cannot keep a single env since it is impossible to revert the predicted action execution effects and revert back to original script
+def get_future_state(script_time, graph, ah_fluents, common_fluents, prev_human_actions, prev_ah_actions, env_id, id_dict, current_script):
+    future_action = predict_next_action(graph, prev_human_actions)
+    print(future_action)
+    if not future_action:
+        return graph, prev_human_actions, prev_ah_actions, current_script, False, False, script_time
+    if 'grab' in future_action:
+        ah_positive_in_hand = [item for item in ah_fluents if item.startswith('holds(in_hand(ahagent,')]
+        action_split = future_action.split('_')
+        obj = action_split[1]
+        if ('holds(in_hand(ahagent,'+ obj + '),0).' in ah_positive_in_hand):
+            return graph, prev_human_actions, prev_ah_actions, current_script, False, False, script_time
+    # assume ad hoc agent does nothing; only human action added to script
+    future_action = future_action.split('_')
+    if len(future_action) == 2:
+        future_action = '<char0> [' + future_action[0] + '] <' + future_action[1] + '> (' + id_dict[future_action[1]] + ')'
+    else:
+        future_action = '<char0> [' + future_action[0] + '] <' + future_action[1] + '> (' + id_dict[future_action[1]] + ') <' + future_action[2] + '> (' + id_dict[future_action[2]] + ')'
+    current_script.append(future_action)
     
-def refine_fluents(graph, ah_fluents, common_fluents, prev_human_actions):
-    action = predict_next_action(graph, prev_human_actions)
-    print('TODO')
-    return ah_fluents, common_fluents
+    start_time = time.time()
+    # initiate a second env
+    comm_dummy = comm_unity.UnityCommunication(port='8082')
+    comm_dummy.reset(env_id)
+    success_dummy, graph_dummy = comm_dummy.environment_graph()
+    success1_dummy, message_dummy, success2_dummy, graph_dummy = clean_graph(comm_dummy, graph_dummy, ['chicken'])
+
+    # Add human
+    comm_dummy.add_character('Chars/Female1', initial_room='kitchen')
+    # Add ad hoc agent
+    comm_dummy.add_character('Chars/Male1', initial_room='kitchen')
+
+
+    for script_instruction in current_script:
+        act_success, human_success, ah_success, message = comm_dummy.render_script([script_instruction], recording=False, skip_animation=True)
+    script_time = script_time + (time.time()-start_time)
+    # Get the state observation
+    success, graph = comm_dummy.environment_graph()
+    if human_success:
+        prev_human_actions.pop(0)
+        prev_human_actions.append(future_action)
+    else:
+        del current_script[-1]
+    # next_future_action = predict_next_action(graph, prev_human_actions)
+    return graph, prev_human_actions, prev_ah_actions, current_script, human_success, ah_success, script_time
+
+def refine_fluents(script_time, literal_time, graph, ah_fluents, common_fluents, prev_human_actions, prev_ah_actions, env_id, id_dict, current_script):
+    all_ah_fluents = ah_fluents.copy()
+    all_common_fluents = common_fluents.copy()
+    for i in range(2):
+        print('-----------------------------------', i)
+        graph, prev_human_actions, prev_ah_actions, current_script, human_success, ah_success, script_time = get_future_state(script_time, graph, ah_fluents, common_fluents, prev_human_actions, prev_ah_actions, env_id, id_dict, current_script)
+        # process state to fluents
+        start = time.time()
+        human_fluents, ah_fluents, common_fluents = convert_state(graph, prev_human_actions, prev_ah_actions, human_success, ah_success, str(i))
+        # find and merge human fluents
+        if i == 0:
+            # remove
+            tem_ah_fluents = [item for item in ah_fluents if 'agent_found' in item or 'agent_hand' in item]
+            all_ah_fluents = [item for item in all_ah_fluents if item not in tem_ah_fluents and '-'+item not in tem_ah_fluents and item[1:] not in tem_ah_fluents]
+            all_ah_fluents = all_ah_fluents + tem_ah_fluents
+            tem_common_fluents = [item for item in common_fluents if item not in all_common_fluents]
+            all_common_fluents = [item for item in all_common_fluents if item not in tem_common_fluents and '-'+item not in tem_common_fluents and item[1:] not in tem_common_fluents]
+            all_common_fluents = all_common_fluents + tem_common_fluents
+        else:
+            tem_ah_fluents = [item for item in ah_fluents if 'agent_found' in item or 'agent_hand' in item]
+            all_ah_fluents = all_ah_fluents + tem_ah_fluents
+            tem_common_fluents = [item for item in common_fluents if item.replace('),'+str(i)+').','),0).') not in all_common_fluents]
+            all_common_fluents = all_common_fluents + tem_common_fluents
+        end = time.time()
+        literal_time = literal_time + (end-start)
+    return all_ah_fluents, all_common_fluents, script_time, literal_time
 
 # return answer sets for the new ASP file
-def run_ASP_human(graph, prev_human_actions, prev_ah_action, act_success):
+def run_ASP_human(ASP_time, graph, prev_human_actions, prev_ah_actions, human_success, ah_success, human_counter):
     found_solution = False
     answer_split = None
-    counter = human_coutner
+    counter = human_counter
+    positive_counter = True
     reader = open(human_asp_pre, 'r')
     pre_asp = reader.read()
     reader.close()
     pre_asp_split = pre_asp.split('\n')
     display_marker_index = pre_asp_split.index(display_marker)
-    human_fluents, ah_fluents, common_fluents = convert_state(graph, prev_human_actions, prev_ah_action, act_success)
+    human_fluents, ah_fluents, common_fluents = convert_state(graph, prev_human_actions, prev_ah_actions, human_success, ah_success, '0')
+    start_time = time.time()
     while (not found_solution) or counter == 0:
         const_term = ['#const n = ' + str(counter) + '.']
         asp_split = const_term + pre_asp_split[:display_marker_index] + human_fluents + common_fluents + pre_asp_split[display_marker_index:]
@@ -566,7 +704,9 @@ def run_ASP_human(graph, prev_human_actions, prev_ah_action, act_success):
         f1.write(asp)
         f1.close()
         try:
-            answer = subprocess.check_output('java -jar ASP/sparc.jar ' +human_asp+' -A -n 1',shell=True, timeout=60)
+            sub_start_time = time.time()
+            answer = subprocess.check_output('java -jar ASP/sparc.jar ' +human_asp+' -A -n 1',shell=True, timeout=10)
+            sub_end_time = time.time()
         except subprocess.TimeoutExpired as exec:
             print('command timed out')
             counter = counter-1
@@ -574,17 +714,29 @@ def run_ASP_human(graph, prev_human_actions, prev_ah_action, act_success):
         answer_split = (answer.decode('ascii'))
         if len(answer_split) > 1:
             found_solution = True
-            human_coutner = counter
-        counter = counter-1 # in case
+            human_counter = counter
+            end_time = time.time()
+            ASP_time = ASP_time + (end_time-start_time) - (sub_end_time-sub_start_time)
+        if counter > 0 and positive_counter:
+            counter = counter-1 # in case
+        else:
+            counter = counter+1
+            positive_counter = False
     actions = process_answerlist(answer_split)
-    return actions, ah_fluents, common_fluents
+    return actions, ah_fluents, common_fluents, human_counter, ASP_time
 
 # return answer sets for the new ASP file
-def run_ASP_ahagent(graph, ah_fluents, common_fluents, prev_human_actions):
+def run_ASP_ahagent(ASP_time, script_time, literal_time, total_time, graph, ah_fluents, common_fluents, prev_human_actions, prev_ah_actions, ah_counter, env_id, id_dict, current_script, step):
+    goal = False
     found_solution = False
     answer_split = None
-    counter = ah_coutner
-    ah_fluents, common_fluents = refine_fluents(graph, ah_fluents, common_fluents, prev_human_actions)
+    counter = ah_counter
+    start_time = time.time()
+    ah_fluents, common_fluents, script_time, literal_time = refine_fluents(script_time, literal_time, graph, ah_fluents, common_fluents, prev_human_actions, prev_ah_actions, env_id, id_dict, current_script)
+    end_time = time.time()
+    total_time = total_time + (end_time-start_time)
+    positive_counter = True
+    start_time = time.time()
     while (not found_solution) or counter == 0:
         const_term = ['#const n = ' + str(counter) + '.']
         reader = open(ah_asp_pre, 'r')
@@ -598,7 +750,9 @@ def run_ASP_ahagent(graph, ah_fluents, common_fluents, prev_human_actions):
         f1.write(asp)
         f1.close()
         try:
-            answer = subprocess.check_output('java -jar ASP/sparc.jar ' +ah_asp_new+' -A -n 1',shell=True, timeout=60)
+            sub_start_time = time.time()
+            answer = subprocess.check_output('java -jar ASP/sparc.jar ' +ah_asp_new+' -A -n 1',shell=True, timeout=10)
+            sub_end_time = time.time()
         except subprocess.TimeoutExpired as exec:
             print('command timed out')
             counter = counter-1
@@ -606,270 +760,91 @@ def run_ASP_ahagent(graph, ah_fluents, common_fluents, prev_human_actions):
         answer_split = (answer.decode('ascii'))
         if len(answer_split) > 1:
             found_solution = True
-            ah_coutner = counter
-        counter = counter-1 # in case
+            ah_counter = counter
+            end_time = time.time()
+            ASP_time = ASP_time + (end_time-start_time) - (sub_end_time-sub_start_time)
+        if counter > 0 and positive_counter:
+            counter = counter-1 # in case
+        else:
+            counter = counter+1
+            positive_counter = False
     actions = process_answerlist(answer_split)
-    return actions
+    # if step == 2:
+    #     with open("asp_404_2.sp", 'w') as f:    
+    #         f.write(asp)
+    #     with open("script_404.txt", 'w') as f2:    
+    #         f2.write(str(current_script))
+    return actions, ah_counter, ASP_time, script_time, literal_time, total_time
 
+def generate_initialscript(human_act, ah_act, id_dict, human_character, ah_character):
+    script = []
+    # select the agent with the longest plan
+    plan_len = len(human_act) if len(human_act) > len(ah_act) else len(ah_act)
+    for action_index in range(plan_len):
+        # either of the agents may or may not have an act at the last steps
+        if len(human_act) > action_index:
+            human_action = human_act[action_index]
+            for delimeter in delimeters:
+                human_action = " ".join(human_action.split(delimeter))
+            human_action_split = human_action.split()
+            if human_action_split[1] in ['put']:
+                human_script_instruction = human_character + ' [putback] <' + human_action_split[3] + '> (' + id_dict[human_action_split[3]] + ') <' + human_action_split[4] + '> (' + id_dict[human_action_split[4]] + ')'
+            else:
+                human_script_instruction = human_character + ' [' + human_action_split[1].replace('_','') + '] <' + human_action_split[3] + '> (' + id_dict[human_action_split[3]] + ')'
+        else:
+            human_script_instruction = None
+        if len(ah_act) > action_index:
+            ah_action = ah_act[action_index]
+            for delimeter in delimeters:
+                ah_action = " ".join(ah_action.split(delimeter))
+            ah_action_split = ah_action.split()
+            ah_script_instruction = ah_character + ' [' + ah_action_split[1].replace('_','') + '] <' + ah_action_split[3] + '> (' + id_dict[ah_action_split[3]] + ')'
+        else:
+            ah_script_instruction = None
+        script_instruction = human_script_instruction + '|' + ah_script_instruction if human_script_instruction and ah_script_instruction else (human_script_instruction if human_script_instruction else ah_script_instruction)
+        script.append(script_instruction)
+    return script
 
-
-# graph, ah_fluents, common_fluents, prev_human_actions
-
-#     human_object_ids = [edge['to_id'] for edge in graph['edges'] if edge['from_id'] == 1 and edge['relation_type'] == 'HOLDS_RH']
-#     ah_object_ids = [edge['to_id'] for edge in graph['edges'] if edge['from_id'] == 2 and edge['relation_type'] == 'HOLDS_RH']
-
-#     for item in human_object_ids: # objects in human hand
-#         names = [node['class_name'] for node in graph['nodes'] if node['id'] == item][0]
-#         human_hand_objects.append(names)
-#     for item in ah_object_ids: # objects in ah agent hand
-#         names = [node['class_name'] for node in graph['nodes'] if node['id'] == item][0]
-#         ah_hand_objects.append(names)
-# find(agent,objects) -> found(#agent,#objects)
-# grab(agent,graspable) -> in_hand(#agent,#graspable)
-# put(agent,graspable,surfaces) -> on(#graspable,#surfaces)
-# open(agent,electricals) -> opened(#electricals)
-# close(agent,electricals) -> -opened(#electricals)
-# switch_on(agent,appliances) -> switched_on(#appliances)
-# switch_off(agent,appliances) -> -switched_on(#appliances)
-# put_in(agent,categorya_food,cook_containers) -> inside(#categorya_food,#cook_containers)
-
-# heated(#categoryb_food)
-# cooked(#categorya_food)
-
-# [find]<bench>
-#     # negative found
-#     human_negative_found = [item for item in ah_fluents if item.startswith('-holds(found(human,')]
-#     ah_negative_found = [item for item in ah_fluents if item.startswith('-holds(found(ah_agent,')]
-#     # postivie found
-#     human_positive_found = [item for item in ah_fluents if item.startswith('holds(found(human,')]
-#     ah_positive_found = [item for item in ah_fluents if item.startswith('holds(found(ah_agent,')]
-#     # negative in_hand
-#     human_negative_in_hand = [item for item in ah_fluents if item.startswith('-holds(in_hand(human,')]
-#     ah_negative_in_hand = [item for item in ah_fluents if item.startswith('-holds(in_hand(ah_agent,')]
-#     # postivie in_hand
-#     human_positive_in_hand = [item for item in ah_fluents if item.startswith('holds(in_hand(human,')]
-#     ah_positive_in_hand = [item for item in ah_fluents if item.startswith('holds(in_hand(ah_agent,')]
-#     # negative on
-#     negative_on = [item for item in ah_fluents if item.startswith('-holds(on(')]
-#     # postivie on
-#     positive_on = [item for item in ah_fluents if item.startswith('holds(on(')]
-#     # negative opened
-#     negative_opened = [item for item in ah_fluents if item.startswith('-holds(opened(')]
-#     # postivie opened
-#     positive_opened = [item for item in ah_fluents if item.startswith('holds(opened(')]
-#     # negative switched_on
-#     negative_switched_on = [item for item in ah_fluents if item.startswith('-holds(switched_on(')]
-#     # postivie switched_on
-#     positive_switched_on = [item for item in ah_fluents if item.startswith('holds(switched_on(')]
-#     # negative inside
-#     negative_inside = [item for item in ah_fluents if item.startswith('-holds(inside(')]
-#     # postivie inside
-#     positive_inside = [item for item in ah_fluents if item.startswith('holds(inside(')]
-#     found_fluents, in_hand_fluents, on_fluents, opened_fluents, switched_on_fluents, inside_fluents = ([] for i in range(6))
-#     if len(re.findall(r'\[.*?\]|\<.*?\>', future_action)) == 2:
-#         # % --------------- % find, grab, open, switchoff, close, switchon
-#         action = re.findall(r'\[(.*?)\]', future_action) # [find]<poundcake>
-#         obj = re.findall(r'\<(.*?)\>', future_action)
-#         if action in ['eat','sit','drink'] or obj in ['bench']:
-#             return ah_fluents, common_fluents
-#         elif action == 'find':
-#             # for fluent in ah_fluents:
-#             # if the human/ad hoc agent has already found the object ignore the action
-#             if ('holds(found(human,' + obj + '),0).' not in human_positive_found) and ('holds(found(ah_agent,' + obj + '),0).' not in ah_positive_found):
-#                 # if the human has another found but the immediate prev action is not a find then
-#                 # replace that with negative, add new found fluent literal, remove the founds negative
-#                 if len(human_positive_found) > 0 and ('find' not in prev_human_actions[-1]):
-#                     positive_found = [item.replace('holds(found', '-holds(found') for item in human_positive_found]
-#                     new_fluent = 'holds(found(human,' + obj + '),0).')
-#                     negative_found = [item for item in human_negative_found if item ! = '-holds(found(human,' + obj + '),0)']
-#                     found_fluents = negative_found + ah_negative_found + positive_found + ah_positive_found + new_fluent
-#         elif action == 'grab':
-#             if ('holds(found(human,'+ obj + '),0).' not in human_positive_found)
-#     else:
-#         # % --------------- % putin, putback
-#         action = re.findall(r'\[.*?\]|\<.*?\>', future_action))[0][1:-1] # [putin]<poundcake><microwave>
-#         obj1 = re.findall(r'\[.*?\]|\<.*?\>', future_action))[1][1:-1]
-#         obj2 = re.findall(r'\[.*?\]|\<.*?\>', future_action))[2][1:-1]
-
-#     else:
-#         human_found_set = False
-#         for obj in objects:
-#             if (obj in appliances or obj in sittable) and prev_human_actions[0] != 'None' and not human_found_set:
-#                 if obj == (prev_human_actions[0].split())[2][1:-1]:
-#                     human_fluents.append('holds(found(human,' + obj + '),0).')
-#                     ah_fluents.append('holds(agent_found(human,' + obj + '),0).')
-#                     human_found_set = True
-#                 else:
-#                     human_fluents.append('-holds(found(human,' + obj + '),0).')
-#             elif obj in human_hand_objects and not human_found_set:
-#                 human_fluents.append('holds(found(human,' + obj + '),0).')
-#                 ah_fluents.append('holds(agent_found(human,' + obj + '),0).')
-#                 human_found_set = True
-#             else:
-#                 human_fluents.append('-holds(found(human,' + obj + '),0).')
-
-
-
-#     if found_fluent
-#     if 'find' in prev_ah_actions[-1] and act_success:
-#         action = (prev_ah_actions[-1].split())[2][1:-1] # <char0> [find] <poundcake> (248) True
-#         for obj in objects:
-#             if obj == action:
-#                 ah_fluents.append('holds(found(ahagent,' + action + '),0).')
-#                 human_fluents.append('holds(agent_found(ahagent,' + action + '),0).')
-#             else:
-#                 ah_fluents.append('-holds(found(ahagent,' + obj + '),0).') 
-#     else:
-#         ah_found_set = False
-#         for obj in objects:
-#             if (obj in appliances or obj in sittable) and prev_ah_actions[0] != 'None' and not ah_found_set:
-#                 if obj == (prev_ah_actions[0].split())[2][1:-1]:
-#                     ah_fluents.append('holds(found(ahagent,' + obj + '),0).')
-#                     human_fluents.append('holds(agent_found(ahagent,' + obj + '),0).')
-#                     found_set = True
-#                 else:
-#                     ah_fluents.append('-holds(found(ahagent,' + obj + '),0).')
-#             elif obj in ah_hand_objects and not found_set:
-#                 ah_fluents.append('holds(found(ahagent,' + obj + '),0).')
-#                 human_fluents.append('holds(agent_found(ahagent,' + obj + '),0).')
-#                 ah_found_set = True
-#             else:
-#                 ah_fluents.append('-holds(found(ahagent,' + obj + '),0).')
-
-#     # % --------------- % grab
-#     if 'grab' in prev_human_actions[-1] and act_success:
-#         action = (prev_human_actions[-1].split())[2][1:-1]
-#         for obj in graspable:
-#             if obj == action:
-#                 human_fluents.append('holds(in_hand(human,' + action + '),0).')
-#                 ah_fluents.append('holds(agent_hand(human,' + action + '),0).')
-#             else:
-#                 human_fluents.append('-holds(in_hand(human,' + obj + '),0).')
-#     else:
-#         for obj in graspable:
-#             if obj in human_hand_objects:
-#                 human_fluents.append('holds(in_hand(human,' + obj + '),0).')
-#                 ah_fluents.append('holds(agent_hand(human,' + obj + '),0).')
-#             else:
-#                 human_fluents.append('-holds(in_hand(human,' + obj + '),0).')
-#     if 'grab' in prev_ah_actions[-1] and act_success:
-#         action = (prev_ah_actions[-1].split())[2][1:-1]
-#         for obj in graspable:
-#             if obj == action:
-#                 ah_fluents.append('holds(in_hand(ahagent,' + action + '),0).')
-#                 human_fluents.append('holds(agent_hand(ahagent,' + action + '),0).')
-#             else:
-#                 ah_fluents.append('-holds(in_hand(ahagent,' + obj + '),0).')
-#     else:
-#         for obj in graspable:
-#             if obj in ah_hand_objects:
-#                 ah_fluents.append('holds(in_hand(ahagent,' + obj + '),0).')
-#                 human_fluents.append('holds(agent_hand(ahagent,' + obj + '),0).')
-#             else:
-#                 ah_fluents.append('-holds(in_hand(ahagent,' + obj + '),0).')
-#     # % --------------- % put
-#     # Items on dinning table
-#     kitchentable_id = [node['id'] for node in graph['nodes'] if node['class_name'] == 'kitchentable'][0]
-#     edges = [edge['from_id'] for edge in graph['edges'] if edge['to_id'] == kitchentable_id and edge['relation_type'] == 'ON']
-#     table_items = [node['class_name']  for edge in edges for node in graph['nodes'] if node['id'] == edge]
-#     for obj in graspable:
-#         if obj in table_items:
-#             fluents.append('holds(on(' + obj + ',kitchentable),0).')
-#         else:
-#             fluents.append('-holds(on(' + obj + ',kitchentable),0).')
-#     # Items inside microwave
-#     microwave_id = [node['id'] for node in graph['nodes'] if node['class_name'] == 'microwave'][0]
-#     item_id = [edge['from_id'] for edge in graph['edges'] if edge['to_id'] == microwave_id and edge['relation_type'] == 'INSIDE']
-#     microwave_item = []
-#     for item in item_id:
-#         names = [node['class_name'] for node in graph['nodes'] if node['id'] == item][0]
-#         microwave_item.append(names)
-#     for obj in graspable:
-#         if obj in microwave_item:
-#             fluents.append('holds(on('+ obj + ',microwave),0).')
-#         else:
-#             fluents.append('-holds(on('+ obj + ',microwave),0).')
-#     # Items on stove
-#     # fryingpan_id = [node['id'] for node in graph['nodes'] if node['class_name'] == 'fryingpan'][0]
-#     # stove_id = [node['id'] for node in graph['nodes'] if node['class_name'] == 'stove'][0]
-#     # pan_on_stove = [True for edge in graph['edges'] if edge['from_id'] == fryingpan_id and edge['to_id'] == stove_id and edge['relation_type'] == 'ON'][0]
-#     # for obj in graspable:
-#     #     if obj == 'fryingpan' and pan_on_stove:
-#     #         fluents.append('holds(on('+ obj + ',stove),0).')
-#     #     else:
-#     #         fluents.append('-holds(on('+ obj + ',stove),0).')
-#     # temp assumption => nothing on stove
-#     default_fluents = ['-holds(on('+ obj + ',stove),0).' for obj in graspable]
-#     fluents = fluents + default_fluents
-
-#     # % --------------- % open/close
-#     # Status of microwave
-#     microwave_status = [node['states'] for node in graph['nodes'] if node['class_name'] == 'microwave'][0]
-#     if 'CLOSED' in microwave_status:
-#         fluents.append('-holds(opened(microwave),0).')
-#     elif 'OPEN' in microwave_status:
-#         fluents.append('holds(opened(microwave),0).')
-
-#     # % --------------- % switch on/off
-#     # Status of microwave
-#     if 'OFF' in microwave_status:
-#         fluents.append('-holds(switched_on(microwave),0).')
-#     elif 'ON' in microwave_status:
-#         fluents.append('holds(switched_on(microwave),0).')
-#     # Status of Stove
-#     stove_status = [node['states'] for node in graph['nodes'] if node['class_name'] == 'stove'][0]
-#     if 'OFF' in stove_status:
-#         fluents.append('-holds(switched_on(stove),0).')
-#     elif 'ON' in stove_status:
-#         fluents.append('holds(switched_on(stove),0).')
-
-#     # % --------------- % heated
-#     for obj in categoryb_food: # poundcake
-#         heated_idx = [idx for idx, item in enumerate(heated_) if item[0] == obj][0]
-#         if (obj in microwave_item and 'ON' in microwave_status) or heated_[heated_idx][1]:
-#             fluents.append('holds(heated(' + obj + '),0).')
-#             heated_[heated_idx][1] = True
-#         else:
-#             fluents.append('-holds(heated(' + obj + '),0).')
-
-#     # % --------------- % cooked
-#     # Items on fryingpan
-#     fryingpan_id = [node['id'] for node in graph['nodes'] if node['class_name'] == 'fryingpan'][0]
-#     item_id = [edge['from_id'] for edge in graph['edges'] if edge['to_id'] == fryingpan_id and edge['relation_type'] == 'ON']
-#     stove_id = [node['id'] for node in graph['nodes'] if node['class_name'] == 'stove'][0]
-#     pan_on_stove = [True for edge in graph['edges'] if edge['from_id'] == fryingpan_id and edge['to_id'] == stove_id and edge['relation_type'] == 'ON'][0]
-#     pan_items = []
-#     for item in item_id:
-#         names = [node['class_name'] for node in graph['nodes'] if node['id'] == item][0]
-#         pan_items.append(names)
-#     for obj in categorya_food: # cutlets
-#         cooked_idx = [idx for idx, item in enumerate(cooked_) if item[0] == obj][0]
-#         if (obj in pan_items and 'ON' in stove_status and pan_on_stove) or cooked_[cooked_idx][1]:
-#             fluents.append('holds(cooked(' + obj + '),0).')
-#             cooked_[cooked_idx][1] = True
-#         else:
-#             fluents.append('-holds(cooked(' + obj + '),0).')
-#     # % --------------- % ate => once we reach the eat action we will stop running the prg since virtaul home does not support eat hence adding default values below
-#     default_fluents = ['-holds(ate(human,' + obj + '),0).' for obj in food]
-#     human_fluents = human_fluents + default_fluents
-#     # % --------------- % drink => same
-#     default_fluents = ['-holds(drank(human,' + obj + '),0).' for obj in drinks]
-#     human_fluents = human_fluents + default_fluents
-#     # % --------------- % put_in
-#     for obj in categorya_food:
-#         if obj in pan_items:
-#             fluents.append('holds(inside(' + obj + ',fryingpan),0).')
-#         else:
-#             fluents.append('-holds(inside(' + obj + ',fryingpan),0).')
-#     # % --------------- % sit
-#     if 'sit' in prev_human_actions[-1] and act_success:
-#         action = (prev_human_actions[-1].split())[2][1:-1]
-#         for obj in sittable:
-#             if obj == action:
-#                 human_fluents.append('holds(sat(human,' + action + '),0).')
-#             else:
-#                 human_fluents.append('-holds(sat(human,' + obj + '),0).')
-#     else:
-#         default_fluents = ['-holds(sat(human,' + obj + '),0).' for obj in sittable]
-#         human_fluents = human_fluents + default_fluents
-#     return human_fluents, ah_fluents, fluents
+def select_initialstate(id_dict, human_character, ah_character):
+    human_act = []
+    ah_act = []
+    items = ['breadslice', 'poundcake', 'waterglass', 'cutlets', 'empty', 'empty']
+    surfaces = ['kitchentable', 'microwave', 'default', 'kitchentable', 'ah_hand', 'human_hand']
+    arrangements = list(permutations(items))
+    selected = arrangements[633] # random.choice(arrangements)
+    object_surfaces = [[i,s] for i, s in zip(selected, surfaces)]
+    print(object_surfaces)
+    # drop the default and empty elements
+    hand_items = object_surfaces[4:]
+    object_surfaces = [ob_su for ob_su in object_surfaces if ob_su[1] != 'default' and ob_su[1] != 'ah_hand' and ob_su[1] != 'human_hand' and ob_su[0] != 'empty']
+    microwave_door_state = ['open','close'][0] # random.choice(['open','close'])
+    microwave_status = ['off','on'][1] # random.choice(['off','on'])
+    stove_status = ['off','on'][1] # random.choice(['off','on'])
+    print(microwave_status, microwave_door_state, stove_status)
+    # human will place the object, ad_agent will only perform in_hand
+    for ob_sr in object_surfaces:
+        human_act.append('occurs(find(human,'+ ob_sr[0] +'),I)')
+        human_act.append('occurs(grab(human,'+ ob_sr[0] +'),I)')
+        human_act.append('occurs(find(human,'+ ob_sr[1] +'),I)')
+        human_act.append('occurs(put(human,' + ob_sr[0] + ',' + ob_sr[1]  + '),I)')
+    if microwave_door_state == 'open':
+        human_act.append('occurs(find(human,microwave),I)')
+        human_act.append('occurs(open(human,microwave),I)') # execut condition if the door is opened cannot be on
+    elif microwave_door_state == 'close':
+        human_act.append('occurs(find(human,microwave),I)')
+        human_act.append('occurs(close(human,microwave),I)')
+        if microwave_status == 'on': # default - off
+            human_act.append('occurs(find(human,microwave),I)')
+            human_act.append('occurs(switch_on(human,microwave),I)')
+    if stove_status == 'on': # default - off
+        human_act.append('occurs(find(human,stove),I)')
+        human_act.append('occurs(switch_on(human,stove),I)')
+    for ha_it in hand_items:
+        if ha_it[0] != 'empty' and ha_it[1] == 'ah_hand':
+            ah_act.append('occurs(find(ah_agent,'+ ha_it[0] +'),I)')
+            ah_act.append('occurs(grab(ah_agent,'+ ha_it[0] +'),I)')
+        if ha_it[0] != 'empty' and ha_it[1] == 'human_hand':
+            human_act.append('occurs(find(human,'+ ha_it[0] +'),I)')
+            human_act.append('occurs(grab(human,'+ ha_it[0] +'),I)')
+    script = generate_initialscript(human_act, ah_act, id_dict, human_character, ah_character)
+    return script, human_act, ah_act

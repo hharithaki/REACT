@@ -1,3 +1,4 @@
+#const n = 15.
 sorts
 #agent = {ahagent}.
 #other_agents = {human}.
@@ -233,5 +234,42 @@ current_step(0).
 
 goal(I) :- holds(heated(poundcake),I), holds(cooked(cutlets),I), holds(on(breadslice,kitchentable),I), holds(on(poundcake,kitchentable),I), holds(on(cutlets,kitchentable),I), holds(on(waterglass,kitchentable),I).
 
+holds(agent_found(human,bench),0).
+-holds(found(ahagent,microwave),0).
+-holds(found(ahagent,stove),0).
+-holds(found(ahagent,breadslice),0).
+-holds(found(ahagent,cutlets),0).
+-holds(found(ahagent,poundcake),0).
+-holds(found(ahagent,waterglass),0).
+-holds(found(ahagent,fryingpan),0).
+-holds(found(ahagent,bench),0).
+-holds(in_hand(ahagent,breadslice),0).
+-holds(in_hand(ahagent,cutlets),0).
+-holds(in_hand(ahagent,poundcake),0).
+-holds(in_hand(ahagent,waterglass),0).
+-holds(in_hand(ahagent,fryingpan),0).
+holds(agent_found(human,stove),0).
+holds(agent_found(human,stove),1).
+holds(on(breadslice,kitchentable),0).
+holds(on(cutlets,kitchentable),0).
+holds(on(poundcake,kitchentable),0).
+holds(on(waterglass,kitchentable),0).
+-holds(on(fryingpan,kitchentable),0).
+-holds(on(breadslice,microwave),0).
+-holds(on(cutlets,microwave),0).
+-holds(on(poundcake,microwave),0).
+-holds(on(waterglass,microwave),0).
+-holds(on(fryingpan,microwave),0).
+-holds(on(breadslice,stove),0).
+-holds(on(cutlets,stove),0).
+-holds(on(poundcake,stove),0).
+-holds(on(waterglass,stove),0).
+holds(on(fryingpan,stove),0).
+holds(opened(microwave),0).
+-holds(switched_on(microwave),0).
+holds(switched_on(stove),0).
+holds(heated(poundcake),0).
+holds(cooked(cutlets),0).
+-holds(inside(cutlets,fryingpan),0).
 display
 occurs.
