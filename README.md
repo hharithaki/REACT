@@ -1,6 +1,6 @@
-# KAT-HRI
+# REACT
 
-Knowledge based Ad hoc Teamwork in Human-robot interaction domain
+Reasoning and Explanations for Ad hoc Collaboration Teams.
 
 ## Folder structure
 
