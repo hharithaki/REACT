@@ -6,10 +6,10 @@ Knowledge based Ad hoc Teamwork in Human-robot interaction domain
 
 ```bash
 .
-├── 
+├── ahagent.sp              # ASP for the ad hoc agent after refinement
 ├── ahagent_pre.sp          # ASP file for the ad hoc agent
-├── human.py                # Main running file - under implementations
-├── human_model.model       # Models of the human
-├── state.csv               # Staet observations used for building the human_model model file
-└── utils.py                # Utility file - under implementations
+├── human.py                # Main file
+├── human_model.model       # Model of the human
+├── utils.py                # Utility file - under implementations
+└── Explanations            # Implementation files for explanation generation
 ```
