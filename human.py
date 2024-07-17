@@ -33,7 +33,7 @@ breadslice_id = [node['id'] for node in graph['nodes'] if node['class_name'] == 
 cutlets_id = [node['id'] for node in graph['nodes'] if node['class_name'] == 'cutlets'][0]
 fryingpan_id = [node['id'] for node in graph['nodes'] if node['class_name'] == 'fryingpan'][0]
 poundcake_id = [node['id'] for node in graph['nodes'] if node['class_name'] == 'poundcake'][0]
-waterglass_id = 103 # bathroom otherwise [node['id'] for node in graph['nodes'] if node['class_name'] == 'waterglass'][0]
+waterglass_id = [node['id'] for node in graph['nodes'] if node['class_name'] == 'waterglass'][1]
 
 # collect and process data
 id_dict = {
@@ -67,7 +67,7 @@ prev_ah_actions = ['None', 'None']
 goal = False
 human_success = False
 ah_success = False
-current_script = initialscript # since the ids are usually same to all envs lets skip retriving ids part for now
+current_script = initialscript # since the ids usually dont change
 
 # ---------------------------------- START: AD HOC TEAMWORK ---------------------------------- #
 
